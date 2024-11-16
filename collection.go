@@ -21,7 +21,8 @@ type CollectionOptions struct {
 	Maps     MapOptions
 	Programs ProgramOptions
 
-	IgnoreUnknownProgram bool
+	IgnoreUnknownProgram      bool
+	IgnoreNotSupportedProgram bool
 
 	// MapReplacements takes a set of Maps that will be used instead of
 	// creating new ones when loading the CollectionSpec.
@@ -297,6 +298,9 @@ func (cs *CollectionSpec) LoadAndAssign(to interface{}, opts *CollectionOptions)
 			p, err := loader.loadProgram(name)
 			if err != nil {
 				if strings.Contains(err.Error(), "unknown program") && opts.IgnoreUnknownProgram {
+					return nil, nil
+				}
+				if strings.Contains(err.Error(), "not supported") && opts.IgnoreNotSupportedProgram {
 					return nil, nil
 				}
 			}
