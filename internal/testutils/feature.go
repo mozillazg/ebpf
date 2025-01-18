@@ -7,10 +7,11 @@ import (
 	"testing"
 
 	"github.com/cilium/ebpf/internal"
+	"github.com/cilium/ebpf/internal/linux"
 )
 
 const (
-	ignoreKernelVersionEnvVar = "EBPF_TEST_IGNORE_KERNEL_VERSION"
+	ignoreVersionEnvVar = "EBPF_TEST_IGNORE_VERSION"
 )
 
 func CheckFeatureTest(t *testing.T, fn func() error) {
@@ -24,7 +25,7 @@ func checkFeatureTestError(t *testing.T, err error) {
 
 	var ufe *internal.UnsupportedFeatureError
 	if errors.As(err, &ufe) {
-		checkKernelVersion(t, ufe)
+		checkVersion(t, ufe)
 	} else {
 		t.Error("Feature test failed:", err)
 	}
@@ -49,7 +50,7 @@ func SkipIfNotSupported(tb testing.TB, err error) {
 
 	var ufe *internal.UnsupportedFeatureError
 	if errors.As(err, &ufe) {
-		checkKernelVersion(tb, ufe)
+		checkVersion(tb, ufe)
 		tb.Skip(ufe.Error())
 	}
 	if errors.Is(err, internal.ErrNotSupported) {
@@ -57,15 +58,28 @@ func SkipIfNotSupported(tb testing.TB, err error) {
 	}
 }
 
-func checkKernelVersion(tb testing.TB, ufe *internal.UnsupportedFeatureError) {
+func SkipIfNotSupportedOnOS(tb testing.TB, err error) {
+	tb.Helper()
+
+	if err == internal.ErrNotSupportedOnOS {
+		tb.Fatal("Unwrapped ErrNotSupportedOnOS")
+	}
+
+	if errors.Is(err, internal.ErrNotSupportedOnOS) {
+		tb.Skip(err.Error())
+	}
+}
+
+func checkVersion(tb testing.TB, ufe *internal.UnsupportedFeatureError) {
 	if ufe.MinimumVersion.Unspecified() {
 		return
 	}
 
 	tb.Helper()
 
-	if ignoreKernelVersionCheck(tb.Name()) {
-		tb.Skipf("Ignoring error due to %s: %s", ignoreKernelVersionEnvVar, ufe.Error())
+	if ignoreVersionCheck(tb.Name()) {
+		tb.Logf("Ignoring error due to %s: %s", ignoreVersionEnvVar, ufe.Error())
+		return
 	}
 
 	if !isKernelLessThan(tb, ufe.MinimumVersion) {
@@ -113,19 +127,22 @@ func isKernelLessThan(tb testing.TB, minv internal.Version) bool {
 func kernelVersion(tb testing.TB) internal.Version {
 	tb.Helper()
 
-	v, err := internal.KernelVersion()
+	v, err := linux.KernelVersion()
 	if err != nil {
 		tb.Fatal(err)
 	}
 	return v
 }
 
-// ignoreKernelVersionCheck checks if test name should be ignored for kernel version check by checking against environment var EBPF_TEST_IGNORE_KERNEL_VERSION.
-// EBPF_TEST_IGNORE_KERNEL_VERSION is a comma (,) separated list of test names for which kernel version check should be ignored.
+// ignoreVersionCheck checks whether to omit the version check for a test.
 //
-// eg: EBPF_TEST_IGNORE_KERNEL_VERSION=TestABC,TestXYZ
-func ignoreKernelVersionCheck(tName string) bool {
-	tNames := os.Getenv(ignoreKernelVersionEnvVar)
+// It reads a comma separated list of test names from an environment variable.
+//
+// For example:
+//
+//	EBPF_TEST_IGNORE_VERSION=TestABC,TestXYZ go test ...
+func ignoreVersionCheck(tName string) bool {
+	tNames := os.Getenv(ignoreVersionEnvVar)
 	if tNames == "" {
 		return false
 	}

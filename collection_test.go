@@ -57,15 +57,15 @@ func TestCollectionSpecNotModified(t *testing.T) {
 }
 
 func TestCollectionSpecCopy(t *testing.T) {
+	ms := &MapSpec{
+		Type:       Array,
+		KeySize:    4,
+		ValueSize:  4,
+		MaxEntries: 1,
+	}
+
 	cs := &CollectionSpec{
-		map[string]*MapSpec{
-			"my-map": {
-				Type:       Array,
-				KeySize:    4,
-				ValueSize:  4,
-				MaxEntries: 1,
-			},
-		},
+		map[string]*MapSpec{"my-map": ms},
 		map[string]*ProgramSpec{
 			"test": {
 				Type: SocketFilter,
@@ -75,6 +75,14 @@ func TestCollectionSpecCopy(t *testing.T) {
 					asm.Return(),
 				},
 				License: "MIT",
+			},
+		},
+		map[string]*VariableSpec{
+			"my-var": {
+				name:   "my-var",
+				offset: 0,
+				size:   4,
+				m:      ms,
 			},
 		},
 		&btf.Spec{},
@@ -325,52 +333,6 @@ func TestCollectionSpecMapReplacements_SpecMismatch(t *testing.T) {
 	}
 }
 
-func TestCollectionRewriteConstants(t *testing.T) {
-	cs := &CollectionSpec{
-		Maps: map[string]*MapSpec{
-			".rodata": {
-				Type:       Array,
-				KeySize:    4,
-				ValueSize:  4,
-				MaxEntries: 1,
-				Value: &btf.Datasec{
-					Vars: []btf.VarSecinfo{
-						{
-							Type: &btf.Var{
-								Name: "the_constant",
-								Type: &btf.Int{Size: 4},
-							},
-							Offset: 0,
-							Size:   4,
-						},
-					},
-				},
-				Contents: []MapKV{
-					{Key: uint32(0), Value: []byte{1, 1, 1, 1}},
-				},
-			},
-		},
-	}
-
-	err := cs.RewriteConstants(map[string]interface{}{
-		"fake_constant_one": uint32(1),
-		"fake_constant_two": uint32(2),
-	})
-	qt.Assert(t, qt.IsNotNil(err), qt.Commentf("RewriteConstants did not fail"))
-
-	var mErr *MissingConstantsError
-	if !errors.As(err, &mErr) {
-		t.Fatal("Error doesn't wrap MissingConstantsError:", err)
-	}
-	qt.Assert(t, qt.ContentEquals(mErr.Constants, []string{"fake_constant_one", "fake_constant_two"}))
-
-	err = cs.RewriteConstants(map[string]interface{}{
-		"the_constant": uint32(0x42424242),
-	})
-	qt.Assert(t, qt.IsNil(err))
-	qt.Assert(t, qt.ContentEquals(cs.Maps[".rodata"].Contents[0].Value.([]byte), []byte{0x42, 0x42, 0x42, 0x42}))
-}
-
 func TestCollectionSpec_LoadAndAssign_LazyLoading(t *testing.T) {
 	spec := &CollectionSpec{
 		Maps: map[string]*MapSpec{
@@ -427,8 +389,9 @@ func TestCollectionSpec_LoadAndAssign_LazyLoading(t *testing.T) {
 
 func TestCollectionSpecAssign(t *testing.T) {
 	var specs struct {
-		Program *ProgramSpec `ebpf:"prog1"`
-		Map     *MapSpec     `ebpf:"map1"`
+		Program  *ProgramSpec  `ebpf:"prog1"`
+		Map      *MapSpec      `ebpf:"map1"`
+		Variable *VariableSpec `ebpf:"var1"`
 	}
 
 	mapSpec := &MapSpec{
@@ -452,6 +415,9 @@ func TestCollectionSpecAssign(t *testing.T) {
 		},
 		Programs: map[string]*ProgramSpec{
 			"prog1": progSpec,
+		},
+		Variables: map[string]*VariableSpec{
+			"var1": {},
 		},
 	}
 

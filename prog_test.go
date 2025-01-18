@@ -269,7 +269,7 @@ func TestProgramTestRunInterrupt(t *testing.T) {
 
 	tid := <-tidChan
 	for {
-		err := unix.Tgkill(tgid, tid, syscall.SIGUSR1)
+		err := unix.Tgkill(tgid, tid, unix.SIGUSR1)
 		if err != nil {
 			t.Fatal("Can't send signal to goroutine thread:", err)
 		}
@@ -469,13 +469,16 @@ func TestProgramVerifierLog(t *testing.T) {
 
 		var ve *internal.VerifierError
 		qt.Assert(t, qt.ErrorAs(err, &ve))
+
+		loglen := len(fmt.Sprintf("%+v", ve))
+		qt.Assert(t, qt.IsTrue(loglen > minVerifierLogSize),
+			qt.Commentf("Log buffer didn't grow past minimum, got %d bytes", loglen))
 	}
 
 	// Generate a base program of sufficient size whose verifier log does not fit
-	// a 128-byte buffer. This should always result in ENOSPC, setting the
-	// VerifierError.Truncated flag.
+	// in the minimum buffer size. Stay under 4096 insn limit of older kernels.
 	var base asm.Instructions
-	for i := 0; i < 32; i++ {
+	for i := 0; i < 4093; i++ {
 		base = append(base, asm.Mov.Reg(asm.R0, asm.R1))
 	}
 
@@ -494,8 +497,7 @@ func TestProgramVerifierLog(t *testing.T) {
 		Instructions: invalid,
 	}
 
-	// Set an undersized log buffer without explicitly requesting a verifier log
-	// for an invalid program.
+	// Don't explicitly request a verifier log for an invalid program.
 	_, err := NewProgramWithOptions(spec, ProgramOptions{})
 	check(t, err)
 
@@ -505,13 +507,22 @@ func TestProgramVerifierLog(t *testing.T) {
 	})
 	check(t, err)
 
+	// Disabling the verifier log should result in a VerifierError without a log.
+	_, err = NewProgramWithOptions(spec, ProgramOptions{
+		LogDisabled: true,
+	})
+	var ve *internal.VerifierError
+	qt.Assert(t, qt.ErrorAs(err, &ve))
+	qt.Assert(t, qt.HasLen(ve.Log, 0))
+
 	// Run tests against a valid program from here on out.
 	spec.Instructions = valid
 
-	// Don't request a verifier log, only set LogSize. Expect the valid program to
-	// be created without errors.
+	// Don't request a verifier log, expect the valid program to be created
+	// without errors.
 	prog, err := NewProgramWithOptions(spec, ProgramOptions{})
 	qt.Assert(t, qt.IsNil(err))
+	qt.Assert(t, qt.HasLen(prog.VerifierLog, 0))
 	prog.Close()
 
 	// Explicitly request verifier log for a valid program. If a log is requested
@@ -520,6 +531,16 @@ func TestProgramVerifierLog(t *testing.T) {
 		LogLevel: LogLevelInstruction,
 	})
 	qt.Assert(t, qt.IsNil(err))
+	qt.Assert(t, qt.IsTrue(len(prog.VerifierLog) > minVerifierLogSize))
+	prog.Close()
+
+	// Repeat the previous test with a larger starting buffer size.
+	prog, err = NewProgramWithOptions(spec, ProgramOptions{
+		LogLevel:     LogLevelInstruction,
+		LogSizeStart: minVerifierLogSize * 2,
+	})
+	qt.Assert(t, qt.IsNil(err))
+	qt.Assert(t, qt.IsTrue(len(prog.VerifierLog) > minVerifierLogSize))
 	prog.Close()
 }
 
@@ -587,6 +608,10 @@ func TestProgramMarshaling(t *testing.T) {
 
 	arr := createProgramArray(t)
 	defer arr.Close()
+
+	if err := arr.Put(idx, (*Program)(nil)); err == nil {
+		t.Fatal("Put accepted a nil Program")
+	}
 
 	prog := mustSocketFilter(t)
 

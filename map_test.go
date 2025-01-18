@@ -104,8 +104,7 @@ func TestMapSpecCopy(t *testing.T) {
 		PinByName,
 		1,
 		[]MapKV{{1, 2}}, // Can't copy Contents, use value types
-		true,
-		nil, // InnerMap
+		nil,             // InnerMap
 		bytes.NewReader(nil),
 		&btf.Int{},
 		&btf.Int{},
@@ -839,6 +838,14 @@ func TestMapQueue(t *testing.T) {
 	}
 
 	var v uint32
+	if err := m.Lookup(nil, &v); err != nil {
+		t.Fatal("Lookup (Peek) on Queue:", err)
+	}
+	if v != 42 {
+		t.Error("Want value 42, got", v)
+	}
+	v = 0
+
 	if err := m.LookupAndDelete(nil, &v); err != nil {
 		t.Fatal("Can't lookup and delete element:", err)
 	}
@@ -856,6 +863,10 @@ func TestMapQueue(t *testing.T) {
 
 	if err := m.LookupAndDelete(nil, &v); !errors.Is(err, ErrKeyNotExist) {
 		t.Fatal("Lookup and delete on empty Queue:", err)
+	}
+
+	if err := m.Lookup(nil, &v); !errors.Is(err, ErrKeyNotExist) {
+		t.Fatal("Lookup (Peek) on empty Queue:", err)
 	}
 }
 
@@ -892,6 +903,10 @@ func TestMapInMap(t *testing.T) {
 
 			if err := outer.Put(uint32(0), inner); err != nil {
 				t.Fatal("Can't put inner map:", err)
+			}
+
+			if err := outer.Put(uint32(0), (*Map)(nil)); err == nil {
+				t.Fatal("Put accepted a nil Map")
 			}
 
 			var inner2 *Map
@@ -964,6 +979,15 @@ func TestPerfEventArray(t *testing.T) {
 			m.Close()
 		}
 	}
+}
+
+func TestCPUMap(t *testing.T) {
+	testutils.SkipOnOldKernel(t, "4.15", "cpu map")
+
+	m, err := NewMap(&MapSpec{Type: CPUMap, KeySize: 4, ValueSize: 4})
+	qt.Assert(t, qt.IsNil(err))
+	qt.Assert(t, qt.Equals(m.MaxEntries(), uint32(MustPossibleCPU())))
+	m.Close()
 }
 
 func createMapInMap(t *testing.T, typ MapType) *Map {
@@ -1051,7 +1075,7 @@ func TestIterateEmptyMap(t *testing.T) {
 
 			var key string
 			var value uint64
-			if entries.Next(&key, &value) != false {
+			if entries.Next(&key, &value) {
 				t.Error("Empty hash should not be iterable")
 			}
 			if err := entries.Err(); err != nil {
@@ -1091,12 +1115,11 @@ func TestMapIterate(t *testing.T) {
 	}
 	defer hash.Close()
 
-	if err := hash.Put("hello", uint32(21)); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := hash.Put("world", uint32(42)); err != nil {
-		t.Fatal(err)
+	data := []string{"hello", "world"}
+	for i, k := range data {
+		if err := hash.Put(k, uint32(i)); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	var key string
@@ -1107,22 +1130,32 @@ func TestMapIterate(t *testing.T) {
 	for entries.Next(&key, &value) {
 		keys = append(keys, key)
 	}
-
-	if err := entries.Err(); err != nil {
-		t.Fatal(err)
-	}
+	qt.Assert(t, qt.IsNil(entries.Err()))
 
 	sort.Strings(keys)
+	qt.Assert(t, qt.DeepEquals(keys, data))
+}
 
-	if n := len(keys); n != 2 {
-		t.Fatal("Expected to get 2 keys, have", n)
-	}
-	if keys[0] != "hello" {
-		t.Error("Expected index 0 to be hello, got", keys[0])
-	}
-	if keys[1] != "world" {
-		t.Error("Expected index 1 to be hello, got", keys[1])
-	}
+func TestIterateWrongMap(t *testing.T) {
+	testutils.SkipOnOldKernel(t, "4.20", "map type queue")
+
+	m, err := NewMap(&MapSpec{
+		Type:       Queue,
+		ValueSize:  4,
+		MaxEntries: 2,
+		Contents: []MapKV{
+			{nil, uint32(0)},
+			{nil, uint32(1)},
+		},
+	})
+	qt.Assert(t, qt.IsNil(err))
+	defer m.Close()
+
+	var value uint32
+	entries := m.Iterate()
+
+	qt.Assert(t, qt.IsFalse(entries.Next(nil, &value)))
+	qt.Assert(t, qt.IsNotNil(entries.Err()))
 }
 
 func TestMapIteratorAllocations(t *testing.T) {
@@ -1143,7 +1176,7 @@ func TestMapIteratorAllocations(t *testing.T) {
 	// AllocsPerRun warms up the function for us.
 	allocs := testing.AllocsPerRun(int(arr.MaxEntries()-1), func() {
 		if !iter.Next(&k, &v) {
-			t.Fatal("Next failed")
+			t.Fatal("Next failed while iterating: %w", iter.Err())
 		}
 	})
 
@@ -1868,6 +1901,38 @@ func TestPerfEventArrayCompatible(t *testing.T) {
 
 	ms.MaxEntries = m.MaxEntries() - 1
 	qt.Assert(t, qt.IsNotNil(ms.Compatible(m)))
+}
+
+func TestLoadWrongPin(t *testing.T) {
+	p := mustSocketFilter(t)
+	m := newHash(t)
+	tmp := testutils.TempBPFFS(t)
+
+	ppath := filepath.Join(tmp, "prog")
+	mpath := filepath.Join(tmp, "map")
+
+	qt.Assert(t, qt.IsNil(m.Pin(mpath)))
+	qt.Assert(t, qt.IsNil(p.Pin(ppath)))
+
+	t.Run("Program", func(t *testing.T) {
+		lp, err := LoadPinnedProgram(ppath, nil)
+		testutils.SkipIfNotSupported(t, err)
+		qt.Assert(t, qt.IsNil(err))
+		qt.Assert(t, qt.IsNil(lp.Close()))
+
+		_, err = LoadPinnedProgram(mpath, nil)
+		qt.Assert(t, qt.IsNotNil(err))
+	})
+
+	t.Run("Map", func(t *testing.T) {
+		lm, err := LoadPinnedMap(mpath, nil)
+		testutils.SkipIfNotSupported(t, err)
+		qt.Assert(t, qt.IsNil(err))
+		qt.Assert(t, qt.IsNil(lm.Close()))
+
+		_, err = LoadPinnedMap(ppath, nil)
+		qt.Assert(t, qt.IsNotNil(err))
+	})
 }
 
 type benchValue struct {

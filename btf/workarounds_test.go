@@ -17,14 +17,14 @@ func TestDatasecResolveWorkaround(t *testing.T) {
 	i := &Int{Size: 1}
 
 	for _, typ := range []Type{
-		&Typedef{"foo", i},
+		&Typedef{"foo", i, nil},
 		&Volatile{i},
 		&Const{i},
 		&Restrict{i},
-		&typeTag{i, "foo"},
+		&TypeTag{i, "foo"},
 	} {
 		t.Run(fmt.Sprint(typ), func(t *testing.T) {
-			if _, ok := typ.(*typeTag); ok {
+			if _, ok := typ.(*TypeTag); ok {
 				testutils.SkipOnOldKernel(t, "5.17", "BTF_KIND_TYPE_TAG")
 			}
 

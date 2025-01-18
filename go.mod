@@ -1,13 +1,12 @@
 module github.com/cilium/ebpf
 
-go 1.21
+go 1.22
 
 require (
 	github.com/go-quicktest/qt v1.101.0
 	github.com/google/go-cmp v0.6.0
 	github.com/jsimonetti/rtnetlink/v2 v2.0.1
-	golang.org/x/exp v0.0.0-20230224173230-c95f2b4c22f2
-	golang.org/x/sys v0.20.0
+	golang.org/x/sys v0.26.0
 )
 
 require (

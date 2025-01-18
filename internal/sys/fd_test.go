@@ -1,6 +1,7 @@
 package sys
 
 import (
+	"errors"
 	"os"
 	"syscall"
 	"testing"
@@ -30,7 +31,7 @@ func reserveFdZero() {
 		panic(err)
 	}
 	if fd != 0 {
-		panic(err)
+		panic(errors.New("zero fd already taken"))
 	}
 }
 
@@ -41,6 +42,7 @@ func TestFD(t *testing.T) {
 	fd, err := NewFD(0)
 	qt.Assert(t, qt.IsNil(err))
 	qt.Assert(t, qt.Not(qt.Equals(fd.Int(), 0)), qt.Commentf("fd value should not be zero"))
+	qt.Assert(t, qt.IsNil(fd.Close()))
 
 	var stat unix.Stat_t
 	err = unix.Fstat(0, &stat)
