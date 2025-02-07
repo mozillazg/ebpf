@@ -797,8 +797,6 @@ func TestProgramAttachToKernel(t *testing.T) {
 	// See https://github.com/torvalds/linux/commit/290248a5b7d829871b3ea3c62578613a580a1744
 	testutils.SkipOnOldKernel(t, "5.5", "attach_btf_id")
 
-	haveTestmod := haveTestmod(t)
-
 	tests := []struct {
 		attachTo    string
 		programType ProgramType
@@ -854,8 +852,8 @@ func TestProgramAttachToKernel(t *testing.T) {
 	for _, test := range tests {
 		name := fmt.Sprintf("%s:%s", test.attachType, test.attachTo)
 		t.Run(name, func(t *testing.T) {
-			if strings.HasPrefix(test.attachTo, "bpf_testmod_") && !haveTestmod {
-				t.Skip("bpf_testmod not loaded")
+			if strings.HasPrefix(test.attachTo, "bpf_testmod_") {
+				requireTestmod(t)
 			}
 
 			prog, err := NewProgram(&ProgramSpec{
@@ -1011,6 +1009,23 @@ func TestProgramLoadErrors(t *testing.T) {
 			qt.Assert(t, qt.ErrorIs(err, test.want))
 		})
 	}
+}
+
+func TestProgramTargetsKernelModule(t *testing.T) {
+	ps := ProgramSpec{Type: Kprobe}
+	qt.Assert(t, qt.IsFalse(ps.targetsKernelModule()))
+
+	ps.AttachTo = "bpf_testmod_test_read"
+	qt.Assert(t, qt.IsTrue(ps.targetsKernelModule()))
+}
+
+func TestProgramAttachToKernelModule(t *testing.T) {
+	requireTestmod(t)
+
+	ps := ProgramSpec{AttachTo: "bpf_testmod_test_read", Type: Tracing, AttachType: AttachTraceFEntry}
+	mod, err := ps.kernelModule()
+	qt.Assert(t, qt.IsNil(err))
+	qt.Assert(t, qt.Equals(mod, "bpf_testmod"))
 }
 
 func BenchmarkNewProgram(b *testing.B) {
