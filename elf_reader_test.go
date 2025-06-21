@@ -118,28 +118,28 @@ func TestLoadCollectionSpec(t *testing.T) {
 				MaxEntries: 1,
 			},
 			".bss": {
-				Name:       SanitizeName(".bss", -1),
+				Name:       ".bss",
 				Type:       Array,
 				KeySize:    4,
 				ValueSize:  4,
 				MaxEntries: 1,
 			},
 			".data": {
-				Name:       SanitizeName(".data", -1),
+				Name:       ".data",
 				Type:       Array,
 				KeySize:    4,
 				ValueSize:  4,
 				MaxEntries: 1,
 			},
 			".data.test": {
-				Name:       SanitizeName(".data.test", -1),
+				Name:       ".data.test",
 				Type:       Array,
 				KeySize:    4,
 				ValueSize:  4,
 				MaxEntries: 1,
 			},
 			".rodata": {
-				Name:       SanitizeName(".rodata", -1),
+				Name:       ".rodata",
 				Type:       Array,
 				KeySize:    4,
 				ValueSize:  24,
@@ -147,7 +147,7 @@ func TestLoadCollectionSpec(t *testing.T) {
 				Flags:      sys.BPF_F_RDONLY_PROG,
 			},
 			".rodata.test": {
-				Name:       SanitizeName(".rodata.test", -1),
+				Name:       ".rodata.test",
 				Type:       Array,
 				KeySize:    4,
 				ValueSize:  4,
@@ -155,7 +155,7 @@ func TestLoadCollectionSpec(t *testing.T) {
 				Flags:      sys.BPF_F_RDONLY_PROG,
 			},
 			".rodata.cst32": {
-				Name:       SanitizeName(".rodata.cst32", -1),
+				Name:       ".rodata.cst32",
 				Type:       Array,
 				KeySize:    4,
 				ValueSize:  32,
@@ -250,16 +250,14 @@ func TestLoadCollectionSpec(t *testing.T) {
 		qt.Assert(t, qt.Equals(have.Maps["perf_event_array"].ValueSize, 0))
 		qt.Assert(t, qt.IsNotNil(have.Maps["perf_event_array"].Value))
 
-		if diff := cmp.Diff(coll, have, csCmpOpts); diff != "" {
-			t.Errorf("MapSpec mismatch (-want +got):\n%s", diff)
-		}
+		qt.Assert(t, qt.CmpEquals(have, coll, csCmpOpts))
 
 		if have.ByteOrder != internal.NativeEndian {
 			return
 		}
 
 		have.Maps["array_of_hash_map"].InnerMap = have.Maps["hash_map"]
-		coll, err := NewCollectionWithOptions(have, CollectionOptions{
+		coll, err := newCollection(t, have, &CollectionOptions{
 			Maps: MapOptions{
 				PinPath: testutils.TempBPFFS(t),
 			},
@@ -272,7 +270,6 @@ func TestLoadCollectionSpec(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer coll.Close()
 
 		ret, _, err := coll.Programs["xdp_prog"].Test(internal.EmptyBPFContext)
 		if err != nil {
@@ -306,11 +303,7 @@ func TestDataSections(t *testing.T) {
 		Program *Program `ebpf:"data_sections"`
 	}
 
-	err = coll.LoadAndAssign(&obj, nil)
-	testutils.SkipIfNotSupported(t, err)
-	if err != nil {
-		t.Fatal(err)
-	}
+	mustLoadAndAssign(t, coll, &obj, nil)
 	defer obj.Program.Close()
 
 	ret, _, err := obj.Program.Test(internal.EmptyBPFContext)
@@ -344,11 +337,7 @@ func TestInlineASMConstant(t *testing.T) {
 		Program *Program `ebpf:"asm_relocation"`
 	}
 
-	err = coll.LoadAndAssign(&obj, nil)
-	testutils.SkipIfNotSupported(t, err)
-	if err != nil {
-		t.Fatal(err)
-	}
+	mustLoadAndAssign(t, coll, &obj, nil)
 	obj.Program.Close()
 }
 
@@ -371,12 +360,8 @@ func TestFreezeRodata(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = spec.LoadAndAssign(&obj, nil)
-	testutils.SkipIfNotSupported(t, err)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer obj.Program.Close()
+	mustLoadAndAssign(t, spec, &obj, nil)
+	obj.Program.Close()
 }
 
 func TestCollectionSpecDetach(t *testing.T) {
@@ -449,12 +434,11 @@ func TestLoadInitializedBTFMap(t *testing.T) {
 				t.Skipf("Skipping %s collection", coll.ByteOrder)
 			}
 
-			tmp, err := NewCollection(coll)
+			_, err := newCollection(t, coll, nil)
 			testutils.SkipIfNotSupported(t, err)
 			if err != nil {
 				t.Fatal("NewCollection failed:", err)
 			}
-			tmp.Close()
 		})
 
 		t.Run("prog_array", func(t *testing.T) {
@@ -556,12 +540,11 @@ func TestStringSection(t *testing.T) {
 		t.Fatal("Read only data maps should have the prog-read-only flag set")
 	}
 
-	coll, err := NewCollection(spec)
+	coll, err := newCollection(t, spec, nil)
 	testutils.SkipIfNotSupported(t, err)
 	if err != nil {
 		t.Fatalf("new collection: %s", err)
 	}
-	defer coll.Close()
 
 	prog := coll.Programs["filter"]
 	if prog == nil {
@@ -623,14 +606,18 @@ func TestTailCall(t *testing.T) {
 	var obj struct {
 		TailMain  *Program `ebpf:"tail_main"`
 		ProgArray *Map     `ebpf:"prog_array_init"`
+		// Windows evicts programs from the tail call array when the last
+		// user space reference is closed. This is not the case on Linux.
+		Tail *Program `ebpf:"tail_1"`
 	}
 
-	err = spec.LoadAndAssign(&obj, nil)
+	err = loadAndAssign(t, spec, &obj, nil)
 	testutils.SkipIfNotSupported(t, err)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer obj.TailMain.Close()
+	defer obj.Tail.Close()
 	defer obj.ProgArray.Close()
 
 	ret, _, err := obj.TailMain.Test(internal.EmptyBPFContext)
@@ -844,7 +831,7 @@ func TestSubprogRelocation(t *testing.T) {
 		HashMap *Map     `ebpf:"hash_map"`
 	}
 
-	err = spec.LoadAndAssign(&obj, nil)
+	err = loadAndAssign(t, spec, &obj, nil)
 	testutils.SkipIfNotSupported(t, err)
 	if err != nil {
 		t.Fatal(err)
@@ -879,12 +866,10 @@ func TestUnassignedProgArray(t *testing.T) {
 		// ProgArray *Map     `ebpf:"prog_array_init"`
 	}
 
-	err = spec.LoadAndAssign(&obj, nil)
+	err = loadAndAssign(t, spec, &obj, nil)
 	testutils.SkipIfNotSupported(t, err)
-	if err == nil {
-		obj.TailMain.Close()
-		t.Fatal("Expecting LoadAndAssign to return error")
-	}
+	defer obj.TailMain.Close()
+	qt.Assert(t, qt.IsNotNil(err))
 }
 
 func TestIPRoute2Compat(t *testing.T) {

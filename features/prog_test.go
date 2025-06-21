@@ -1,5 +1,3 @@
-//go:build linux
-
 package features
 
 import (
@@ -12,11 +10,11 @@ import (
 	"github.com/cilium/ebpf/asm"
 	"github.com/cilium/ebpf/internal"
 	"github.com/cilium/ebpf/internal/testutils"
-	"github.com/cilium/ebpf/internal/testutils/fdtrace"
+	"github.com/cilium/ebpf/internal/testutils/testmain"
 )
 
 func TestMain(m *testing.M) {
-	fdtrace.TestMain(m)
+	testmain.Run(m)
 }
 
 func TestHaveProgramType(t *testing.T) {
@@ -40,7 +38,7 @@ func TestHaveProgramHelper(t *testing.T) {
 	}
 
 	// Referencing linux kernel commits to track the kernel version required to pass these test cases.
-	// They cases are derived from libbpf's selftests and helper/prog combinations that are
+	// These cases are derived from libbpf's selftests and helper/prog combinations that are
 	// probed for in cilium/cilium.
 	testCases := []testCase{
 		{ebpf.Kprobe, asm.FnMapLookupElem, nil, "3.19"},                     // d0003ec01c66
@@ -65,6 +63,10 @@ func TestHaveProgramHelper(t *testing.T) {
 		{ebpf.CGroupSockAddr, asm.FnGetCgroupClassid, nil, "5.7"},           // 5a52ae4e32a6
 		{ebpf.Kprobe, asm.FnGetBranchSnapshot, nil, "5.16"},                 // 856c02dbce4f
 		{ebpf.SchedCLS, asm.FnSkbSetTstamp, nil, "5.18"},                    // 9bb984f28d5b
+		{ebpf.CGroupSockopt, asm.FnSkStorageDelete, nil, "5.3"},             // 6ac99e8f23d4
+		{ebpf.SkLookup, asm.FnSkcToUdp6Sock, nil, "5.9"},                    // 0d4fad3e57df
+		{ebpf.Syscall, asm.FnSysClose, nil, "5.14"},                         // 3abea089246f
+		{ebpf.Netfilter, asm.FnCgrpStorageDelete, nil, "6.4"},               // c4bcfb38a95e
 	}
 
 	for _, tc := range testCases {
@@ -74,6 +76,7 @@ func TestHaveProgramHelper(t *testing.T) {
 			testutils.SkipOnOldKernel(t, tc.version, feature)
 
 			err := HaveProgramHelper(tc.prog, tc.helper)
+			testutils.SkipIfNotSupportedOnOS(t, err)
 			if !errors.Is(err, tc.expected) {
 				t.Fatalf("%s/%s: %v", tc.prog.String(), tc.helper.String(), err)
 			}

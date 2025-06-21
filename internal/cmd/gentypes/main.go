@@ -7,10 +7,12 @@ package main
 import (
 	"bytes"
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/cilium/ebpf/btf"
@@ -25,8 +27,40 @@ const (
 	retFd
 )
 
+var (
+	verbose bool
+)
+
+func debugln(a ...any) {
+	if verbose {
+		fmt.Println(a...)
+	}
+}
+
+func getBool(key string, defaultVal bool) bool {
+	val, ok := os.LookupEnv(key)
+	if !ok {
+		return defaultVal
+	}
+
+	b, err := strconv.ParseBool(val)
+	if err != nil {
+		return defaultVal
+	}
+
+	return b
+}
+
 func main() {
-	if err := run(os.Args[1:]); err != nil {
+	fs := flag.NewFlagSet("gentypes", flag.ContinueOnError)
+	fs.BoolVar(&verbose, "verbose", getBool("V", false), "Enable verbose logging ($V)")
+
+	if err := fs.Parse(os.Args[1:]); err != nil {
+		fmt.Fprintln(os.Stderr, "Error:", err)
+		os.Exit(1)
+	}
+
+	if err := run(fs.Args()); err != nil {
 		fmt.Fprintln(os.Stderr, "Error:", err)
 		os.Exit(1)
 	}
@@ -70,20 +104,46 @@ func run(args []string) error {
 
 func generateTypes(spec *btf.Spec) ([]byte, error) {
 	objName := &btf.Array{Nelems: 16, Type: &btf.Int{Encoding: btf.Char, Size: 1}}
+	mapID := &btf.Int{Size: 4}
+	progID := &btf.Int{Size: 4}
 	linkID := &btf.Int{Size: 4}
 	btfID := &btf.Int{Size: 4}
 	typeID := &btf.Int{Size: 4}
-	pointer := &btf.Int{Size: 8}
 	logLevel := &btf.Int{Size: 4}
+
+	rawPointer := &btf.Pointer{}
+	stringPointer := &btf.Pointer{}
+	stringSlicePointer := &btf.Pointer{}
+	bytePtr := &btf.Pointer{}
+	int32Ptr := &btf.Pointer{}
+	uint32Ptr := &btf.Pointer{}
+	uint64Ptr := &btf.Pointer{}
+	uintptrPointer := &btf.Pointer{}
+	mapIDPtr := &btf.Pointer{}
+	progIDPtr := &btf.Pointer{}
+	linkIDPtr := &btf.Pointer{}
 
 	gf := &btf.GoFormatter{
 		Names: map[btf.Type]string{
 			objName:  internal.GoTypeName(sys.ObjName{}),
+			mapID:    internal.GoTypeName(sys.MapID(0)),
+			progID:   internal.GoTypeName(sys.ProgramID(0)),
 			linkID:   internal.GoTypeName(sys.LinkID(0)),
 			btfID:    internal.GoTypeName(sys.BTFID(0)),
 			typeID:   internal.GoTypeName(sys.TypeID(0)),
-			pointer:  internal.GoTypeName(sys.Pointer{}),
 			logLevel: internal.GoTypeName(sys.LogLevel(0)),
+
+			rawPointer:         internal.GoTypeName(sys.Pointer{}),
+			stringPointer:      internal.GoTypeName(sys.StringPointer{}),
+			stringSlicePointer: internal.GoTypeName(sys.StringSlicePointer{}),
+			bytePtr:            internal.GoTypeName(sys.TypedPointer[byte]{}),
+			int32Ptr:           internal.GoTypeName(sys.TypedPointer[int32]{}),
+			uint32Ptr:          internal.GoTypeName(sys.TypedPointer[uint32]{}),
+			uint64Ptr:          internal.GoTypeName(sys.TypedPointer[uint64]{}),
+			uintptrPointer:     internal.GoTypeName(sys.TypedPointer[uintptr]{}),
+			mapIDPtr:           internal.GoTypeName(sys.TypedPointer[sys.MapID]{}),
+			progIDPtr:          internal.GoTypeName(sys.TypedPointer[sys.ProgramID]{}),
+			linkIDPtr:          internal.GoTypeName(sys.TypedPointer[sys.LinkID]{}),
 		},
 		Identifier: internal.Identifier,
 		EnumIdentifier: func(name, element string) string {
@@ -98,6 +158,7 @@ package sys
 
 import (
 	"unsafe"
+	"structs"
 )
 
 `)
@@ -127,12 +188,15 @@ import (
 		return consts[i].Name < consts[j].Name
 	})
 
+	var nconsts uint32
 	w.WriteString("const (\n")
 	for _, c := range consts {
-		fmt.Println("const", c.Name)
+		debugln("const", c.Name)
 		fmt.Fprintf(w, "\t%s = %v\n", c.Name, c.Value)
+		nconsts++
 	}
 	w.WriteString(")\n")
+	fmt.Printf("Generated %d constants\n", nconsts)
 
 	// Typed constants (aka named enums)
 	enums := []struct {
@@ -161,9 +225,10 @@ import (
 		return enums[i].goType < enums[j].goType
 	})
 
+	var nenums uint32
 	enumTypes := make(map[string]btf.Type)
 	for _, o := range enums {
-		fmt.Println("enum", o.goType)
+		debugln("enum", o.goType)
 
 		var t *btf.Enum
 		if err := spec.TypeByName(o.cType, &t); err != nil {
@@ -185,7 +250,10 @@ import (
 
 		w.WriteString(decl)
 		w.WriteRune('\n')
+
+		nenums++
 	}
+	fmt.Printf("Generated %d enums\n", nenums)
 
 	// Assorted structs
 
@@ -198,14 +266,14 @@ import (
 			"ProgInfo", "bpf_prog_info",
 			[]patch{
 				replace(objName, "name"),
-				replace(pointer, "jited_prog_insns"),
-				replace(pointer, "xlated_prog_insns"),
-				replace(pointer, "map_ids"),
-				replace(pointer, "line_info"),
-				replace(pointer, "jited_line_info"),
-				replace(pointer, "jited_ksyms"),
-				replace(pointer, "jited_func_lens"),
-				replace(pointer, "func_info"),
+				replace(bytePtr, "jited_prog_insns"),
+				replace(bytePtr, "xlated_prog_insns"),
+				replace(mapIDPtr, "map_ids"),
+				replace(bytePtr, "line_info"),
+				replace(uint64Ptr, "jited_line_info"),
+				replace(uint64Ptr, "jited_ksyms"),
+				replace(uint32Ptr, "jited_func_lens"),
+				replace(bytePtr, "func_info"),
 				replace(btfID, "btf_id", "attach_btf_obj_id"),
 				replace(typeID, "attach_btf_id"),
 			},
@@ -213,6 +281,7 @@ import (
 		{
 			"MapInfo", "bpf_map_info",
 			[]patch{
+				replace(mapID, "id"),
 				replace(objName, "name"),
 				replace(typeID, "btf_vmlinux_value_type_id", "btf_key_type_id", "btf_value_type_id"),
 			},
@@ -220,7 +289,7 @@ import (
 		{
 			"BtfInfo", "bpf_btf_info",
 			[]patch{
-				replace(pointer, "btf", "name"),
+				replace(bytePtr, "btf", "name"),
 				replace(btfID, "id"),
 			},
 		},
@@ -249,8 +318,9 @@ import (
 		return structs[i].goType < structs[j].goType
 	})
 
+	var nstructs uint32
 	for _, s := range structs {
-		fmt.Println("struct", s.goType)
+		debugln("struct", s.goType)
 
 		var t *btf.Struct
 		if err := spec.TypeByName(s.cType, &t); err != nil {
@@ -260,7 +330,9 @@ import (
 		if err := outputPatchedStruct(gf, w, s.goType, t, s.patches); err != nil {
 			return nil, fmt.Errorf("output %q: %w", s.goType, err)
 		}
+		nstructs++
 	}
+	fmt.Printf("Generated %d structs\n", nstructs)
 
 	// Attrs
 
@@ -281,24 +353,24 @@ import (
 		},
 		{
 			"MapLookupElem", retError, "map_elem", "BPF_MAP_LOOKUP_ELEM",
-			[]patch{choose(2, "value"), replace(pointer, "key", "value")},
+			[]patch{choose(2, "value"), replace(rawPointer, "key", "value")},
 		},
 		{
 			"MapLookupAndDeleteElem", retError, "map_elem", "BPF_MAP_LOOKUP_AND_DELETE_ELEM",
-			[]patch{choose(2, "value"), replace(pointer, "key", "value")},
+			[]patch{choose(2, "value"), replace(rawPointer, "key", "value")},
 		},
 		{
 			"MapUpdateElem", retError, "map_elem", "BPF_MAP_UPDATE_ELEM",
-			[]patch{choose(2, "value"), replace(pointer, "key", "value")},
+			[]patch{choose(2, "value"), replace(rawPointer, "key", "value")},
 		},
 		{
 			"MapDeleteElem", retError, "map_elem", "BPF_MAP_DELETE_ELEM",
-			[]patch{choose(2, "value"), replace(pointer, "key", "value")},
+			[]patch{choose(2, "value"), replace(rawPointer, "key", "value")},
 		},
 		{
 			"MapGetNextKey", retError, "map_elem", "BPF_MAP_GET_NEXT_KEY",
 			[]patch{
-				choose(2, "next_key"), replace(pointer, "key", "next_key"),
+				choose(2, "next_key"), replace(rawPointer, "key", "next_key"),
 				truncateAfter("next_key"),
 			},
 		},
@@ -308,19 +380,19 @@ import (
 		},
 		{
 			"MapLookupBatch", retError, "map_elem_batch", "BPF_MAP_LOOKUP_BATCH",
-			[]patch{replace(pointer, "in_batch", "out_batch", "keys", "values")},
+			[]patch{replace(rawPointer, "in_batch", "out_batch", "keys", "values")},
 		},
 		{
 			"MapLookupAndDeleteBatch", retError, "map_elem_batch", "BPF_MAP_LOOKUP_AND_DELETE_BATCH",
-			[]patch{replace(pointer, "in_batch", "out_batch", "keys", "values")},
+			[]patch{replace(rawPointer, "in_batch", "out_batch", "keys", "values")},
 		},
 		{
 			"MapUpdateBatch", retError, "map_elem_batch", "BPF_MAP_UPDATE_BATCH",
-			[]patch{replace(pointer, "in_batch", "out_batch", "keys", "values")},
+			[]patch{replace(rawPointer, "in_batch", "out_batch", "keys", "values")},
 		},
 		{
 			"MapDeleteBatch", retError, "map_elem_batch", "BPF_MAP_DELETE_BATCH",
-			[]patch{replace(pointer, "in_batch", "out_batch", "keys", "values")},
+			[]patch{replace(rawPointer, "in_batch", "out_batch", "keys", "values")},
 		},
 		{
 			"ProgLoad", retFd, "prog_load", "BPF_PROG_LOAD",
@@ -329,15 +401,15 @@ import (
 				replace(enumTypes["ProgType"], "prog_type"),
 				replace(enumTypes["AttachType"], "expected_attach_type"),
 				replace(logLevel, "log_level"),
-				replace(pointer,
-					"insns",
-					"license",
-					"log_buf",
+				replace(bytePtr, "insns"),
+				replace(stringPointer, "license"),
+				replace(bytePtr, "log_buf"),
+				replace(bytePtr,
 					"func_info",
 					"line_info",
-					"fd_array",
 					"core_relos",
 				),
+				replace(int32Ptr, "fd_array"),
 				replace(typeID, "attach_btf_id"),
 				choose(20, "attach_btf_obj_fd"),
 			},
@@ -348,11 +420,11 @@ import (
 		},
 		{
 			"ObjPin", retError, "obj_pin", "BPF_OBJ_PIN",
-			[]patch{replace(pointer, "pathname")},
+			[]patch{replace(stringPointer, "pathname")},
 		},
 		{
 			"ObjGet", retFd, "obj_pin", "BPF_OBJ_GET",
-			[]patch{replace(pointer, "pathname")},
+			[]patch{replace(stringPointer, "pathname")},
 		},
 		{
 			"ProgAttach", retError, "prog_attach", "BPF_PROG_ATTACH",
@@ -374,7 +446,7 @@ import (
 		},
 		{
 			"ProgRun", retError, "prog_run", "BPF_PROG_TEST_RUN",
-			[]patch{replace(pointer, "data_in", "data_out", "ctx_in", "ctx_out")},
+			[]patch{replace(bytePtr, "data_in", "data_out", "ctx_in", "ctx_out")},
 		},
 		{
 			"ProgGetNextId", retError, "obj_next_id", "BPF_PROG_GET_NEXT_ID",
@@ -426,15 +498,15 @@ import (
 		},
 		{
 			"ObjGetInfoByFd", retError, "info_by_fd", "BPF_OBJ_GET_INFO_BY_FD",
-			[]patch{replace(pointer, "info")},
+			[]patch{replace(rawPointer, "info")},
 		},
 		{
 			"RawTracepointOpen", retFd, "raw_tracepoint_open", "BPF_RAW_TRACEPOINT_OPEN",
-			[]patch{replace(pointer, "name")},
+			[]patch{replace(stringPointer, "name")},
 		},
 		{
 			"BtfLoad", retFd, "btf_load", "BPF_BTF_LOAD",
-			[]patch{replace(pointer, "btf", "btf_log_buf")},
+			[]patch{replace(bytePtr, "btf", "btf_log_buf")},
 		},
 		{
 			"LinkCreate", retFd, "link_create", "BPF_LINK_CREATE",
@@ -450,7 +522,7 @@ import (
 				chooseNth(4, 1),
 				replace(enumTypes["AttachType"], "attach_type"),
 				flattenAnon,
-				replace(pointer, "iter_info"),
+				replace(rawPointer, "iter_info"),
 			},
 		},
 		{
@@ -470,9 +542,9 @@ import (
 					return rename("flags", "kprobe_multi_flags")(m.Type.(*btf.Struct))
 				}, "kprobe_multi"),
 				flattenAnon,
-				replace(pointer, "cookies"),
-				replace(pointer, "addrs"),
-				replace(pointer, "syms"),
+				replace(uint64Ptr, "cookies"),
+				replace(uintptrPointer, "addrs"),
+				replace(stringSlicePointer, "syms"),
 				rename("cnt", "count"),
 			},
 		},
@@ -516,10 +588,10 @@ import (
 					return rename("flags", "uprobe_multi_flags")(m.Type.(*btf.Struct))
 				}, "uprobe_multi"),
 				flattenAnon,
-				replace(pointer, "path"),
-				replace(pointer, "offsets"),
-				replace(pointer, "ref_ctr_offsets"),
-				replace(pointer, "cookies"),
+				replace(stringPointer, "path"),
+				replace(uint64Ptr, "offsets"),
+				replace(uint64Ptr, "ref_ctr_offsets"),
+				replace(uint64Ptr, "cookies"),
 				rename("cnt", "count"),
 			},
 		},
@@ -550,8 +622,8 @@ import (
 			"ProgQuery", retError, "prog_query", "BPF_PROG_QUERY",
 			[]patch{
 				replace(enumTypes["AttachType"], "attach_type"),
-				replace(pointer, "prog_ids", "prog_attach_flags"),
-				replace(pointer, "link_ids", "link_attach_flags"),
+				replace(progIDPtr, "prog_ids", "prog_attach_flags"),
+				replace(linkIDPtr, "link_ids", "link_attach_flags"),
 				flattenAnon,
 				rename("prog_cnt", "count"),
 				rename("target_fd", "target_fd_or_ifindex"),
@@ -592,8 +664,9 @@ import (
 		return nil, fmt.Errorf("split bpf_attr: %w", err)
 	}
 
+	var nattrs uint32
 	for _, s := range attrs {
-		fmt.Println("attr", s.goType)
+		debugln("attr", s.goType)
 
 		t := attrTypes[s.cType]
 		if t == nil {
@@ -611,7 +684,9 @@ import (
 		case retFd:
 			fmt.Fprintf(w, "func %s(attr *%s) (*FD, error) { fd, err := BPF(%s, unsafe.Pointer(attr), unsafe.Sizeof(*attr)); if err != nil { return nil, err }; return NewFD(int(fd)) }\n\n", s.goType, goAttrType, s.cmd)
 		}
+		nattrs++
 	}
+	fmt.Printf("Generated %d attrs\n", nattrs)
 
 	// Link info type specific
 	linkInfoExtraTypes := []struct {
@@ -629,7 +704,7 @@ import (
 			[]patch{
 				choose(3, "iter"),
 				flattenAnon,
-				replace(pointer, "target_name"),
+				replace(bytePtr, "target_name"),
 				truncateAfter("target_name_len"),
 			},
 		},
@@ -642,7 +717,7 @@ import (
 		{"RawTracepointLinkInfo",
 			[]patch{choose(3, "raw_tracepoint"),
 				flattenAnon,
-				replace(pointer, "tp_name"),
+				replace(bytePtr, "tp_name"),
 			},
 		},
 		{"TracingLinkInfo",
@@ -682,7 +757,8 @@ import (
 			[]patch{
 				choose(3, "kprobe_multi"),
 				flattenAnon,
-				replace(pointer, "addrs"),
+				replace(uint64Ptr, "addrs"),
+				replace(uint64Ptr, "cookies"),
 			},
 		},
 		{"PerfEventLinkInfo",
@@ -702,7 +778,7 @@ import (
 				replace(enumTypes["PerfEventType"], "perf_event_type"),
 				choose(4, "kprobe"),
 				flattenAnon,
-				replace(pointer, "func_name"),
+				replace(bytePtr, "func_name"),
 			},
 		},
 	}
@@ -757,6 +833,8 @@ func outputPatchedStruct(gf *btf.GoFormatter, w *bytes.Buffer, id string, s *btf
 	if err != nil {
 		return err
 	}
+
+	decl = strings.Replace(decl, "struct {", "struct { structs.HostLayout;", 1)
 
 	w.WriteString(decl)
 	w.WriteString("\n\n")

@@ -9,13 +9,12 @@ env:
   TMPDIR: /tmp
   CI_MAX_KERNEL_VERSION: '6.11'
   CI_MAX_EFW_VERSION: '0.20.0'
-  CI_MIN_CLANG_VERSION: '11'
-  go_version: '~1.23'
-  prev_go_version: '~1.22'
+  CI_MIN_CLANG_VERSION: '13'
+  go_version: '~1.24'
+  prev_go_version: '~1.23'
   CGO_ENABLED: '0'
-  # This needs to match whatever Netlify supports.
-  # Also defined in Pipfile.
-  python_version: '~3.8'
+  # Sync with Pipfile and netlify.toml.
+  python_version: '~3.13'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -35,9 +34,7 @@ jobs:
           go-version: '${{ env.go_version }}'
 
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v6.1.1
-        with:
-          args: "--out-format colored-line-number"
+        uses: golangci/golangci-lint-action@v7.0.0
 
       - name: Generate and format code
         run: |
@@ -49,16 +46,15 @@ jobs:
 
       - name: Test bpf2go
         run: |
-          sudo apt-get install clang-11 llvm-11
           go test -v ./cmd/bpf2go
 
       - name: Build examples
         run: go build -v ./...
         working-directory: ./examples
 
-      - name: Cross build windows
+      - name: Cross build darwin
         env:
-          GOOS: windows
+          GOOS: darwin
         run: |
           go build -v ./...
           go test -c -o /dev/null ./... >/dev/null
@@ -120,7 +116,7 @@ jobs:
           go-version: '${{ env.prev_go_version }}'
 
       - run: go install lmb.io/vimto@latest
-      - run: go install gotest.tools/gotestsum@v1.8.1
+      - run: go install gotest.tools/gotestsum@v1.12.0
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-system-x86
       - run: sudo chmod 0666 /dev/kvm
 
@@ -165,7 +161,7 @@ jobs:
         with:
           go-version: '${{ env.go_version }}'
 
-      - run: go install gotest.tools/gotestsum@v1.8.1
+      - run: go install gotest.tools/gotestsum@v1.12.0
 
       - name: Test
         # Skip TestGoarches/loong64 because the GH arm64 Go toolchain seems to be weird.
@@ -203,7 +199,6 @@ jobs:
           - "5.4"
           - "4.19"
           - "4.14"
-          - "4.9"
     steps:
       - uses: actions/checkout@v4
 
@@ -212,7 +207,7 @@ jobs:
         with:
           go-version: '${{ env.go_version }}'
 
-      - run: go install gotest.tools/gotestsum@v1.8.1
+      - run: go install gotest.tools/gotestsum@v1.12.0
       - run: go install lmb.io/vimto@latest
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-system-x86
       - run: sudo chmod 0666 /dev/kvm
@@ -243,6 +238,7 @@ jobs:
       GOMODCACHE: D:\gomodcache
       # Avoid putting temp on slow C:
       TEMP: D:\temp
+      CI_EFW_VERSION: "0.20.0"
 
     steps:
       - run: mkdir D:\temp
@@ -250,7 +246,7 @@ jobs:
 
       - name: Get eBPF for Windows download URL
         id: determine-url
-        uses: actions/github-script@v6
+        uses: actions/github-script@v7
         with:
           script: |
             if ("${{ matrix.version }}" != "main") {
@@ -265,8 +261,9 @@ jobs:
               owner: 'microsoft',
               repo: 'ebpf-for-windows',
               workflow_id: 'cicd.yml',
-              event: 'merge_group',
-              status: 'success',
+              event: 'push',
+              branch: 'main',
+              status: 'completed',
               per_page: 1
             });
 
@@ -277,6 +274,9 @@ jobs:
 
             // Get artifacts from this run
             const run_id = workflow_runs.data.workflow_runs[0].id;
+            const run_url = workflow_runs.data.workflow_runs[0].html_url;
+            console.log(`Using workflow run: ${run_url}`);
+
             const artifacts = await github.rest.actions.listWorkflowRunArtifacts({
               owner: 'microsoft',
               repo: 'ebpf-for-windows',
@@ -304,7 +304,7 @@ jobs:
             });
 
             // Extract the location header which contains the actual download URL
-            const download_url = response.headers.location;
+            const download_url = response.url;
 
             if (!download_url) {
               core.setFailed('Failed to get redirect URL from headers');
@@ -330,6 +330,10 @@ jobs:
             exit 1
           }
 
+      - name: Add eBPF for Windows to PATH
+        shell: pwsh
+        run: echo "C:\Program Files\ebpf-for-windows\" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
       - uses: actions/checkout@v4
 
       - name: Set up Go
@@ -337,21 +341,28 @@ jobs:
         with:
           go-version: '${{ env.go_version }}'
 
-      - run: go install gotest.tools/gotestsum@v1.8.1
+      - run: go install gotest.tools/gotestsum@v1.12.0
 
       - name: Test
         run: >
           gotestsum --raw-command --ignore-non-json-output-lines --junitfile junit.xml --
           go test -short -count 1 -json
+          ./
           ./asm
+          ./btf
+          ./features
           ./internal
+          ./internal/efw
           ./internal/kallsyms
           ./internal/kconfig
           ./internal/linux
+          ./internal/sys
           ./internal/sysenc
           ./internal/testutils
+          ./internal/testutils/testmain
           ./internal/tracefs
           ./internal/unix
+          ./link
 
       - name: Upload Test Results
         if: always()

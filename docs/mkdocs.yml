@@ -60,6 +60,7 @@ nav:
   - 'Guides':
     - 'Getting Started': guides/getting-started.md
     - 'Portable eBPF': guides/portable-ebpf.md
+    - 'Windows support': guides/windows-support.md
   - 'Concepts':
     - 'Loading eBPF Programs': concepts/loader.md
     - 'Global Variables': concepts/global-variables.md
@@ -72,6 +73,7 @@ nav:
     - contributing/architecture.md
     - contributing/new-feature.md
     - contributing/new-example.md
+    - contributing/windows.md
   - 'Users': users.md
   - 'Go Reference': https://pkg.go.dev/github.com/cilium/ebpf
   - 'GitHub':
